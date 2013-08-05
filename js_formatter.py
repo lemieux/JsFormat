@@ -1,9 +1,11 @@
-import sublime, sublime_plugin, re, sys, os
+import sublime, sublime_plugin, re, sys, os, json
 
 directory = os.path.dirname(os.path.realpath(__file__))
 libs_path = os.path.join(directory, "libs")
 is_py2k = sys.version_info < (3, 0)
 
+JSON_MULTILINE_COMMENT_RE = re.compile(r'\/\*[\s\S]*?\*\/')
+JSON_SINGLELINE_COMMENT_RE = re.compile(r'\/\/[^\n\r]*')
 
 # Python 2.x on Windows can't properly import from non-ASCII paths, so
 # this code added the DOC 8.3 version of the lib folder to the path in
@@ -36,6 +38,7 @@ import merge_utils
 
 s = None
 
+
 def plugin_loaded():
 	global s
 	s = sublime.load_settings("JsFormat.sublime-settings")
@@ -64,10 +67,63 @@ class PreSaveFormatListner(sublime_plugin.EventListener):
 		if(s.get("format_on_save") == True and is_js_buffer(view)):
 			view.run_command("js_format")
 
+# Parts about find_file, json_comments and project options are taken
+# from SublimeLinter source code (https://github.com/SublimeLinter/SublimeLinter)
 
 class JsFormatCommand(sublime_plugin.TextCommand):
+    def find_file(self, filename, view):
+        '''Find a file with the given name, starting in the view's directory,
+           then ascending the file hierarchy up to root.'''
+        path = (view.file_name() or '').encode('utf-8')
+
+        # quit if the view is temporary
+        if not path:
+            return None
+
+        dirname = os.path.dirname(path)
+
+        while True:
+            path = os.path.join(dirname, filename)
+
+            if os.path.isfile(path):
+                with open(path, 'r') as f:
+                    return f.read()
+
+            # if we hit root, quit
+            parent = os.path.dirname(dirname)
+
+            if parent == dirname:
+                return None
+            else:
+                dirname = parent
+
+
+    def strip_json_comments(self, json_str):
+        stripped_json = JSON_MULTILINE_COMMENT_RE.sub('', json_str)
+        stripped_json = JSON_SINGLELINE_COMMENT_RE.sub('', stripped_json)
+        return json.dumps(json.loads(stripped_json))
+
+
+    def get_project_options(self):
+        project_options = self.find_file('.jsformat', self.view)
+
+        if project_options is not None:
+            project_options = self.strip_json_comments(project_options)
+            return json.dumps(json.loads(project_options))
+        return {}
+
+
+    def settings(self):
+        settings = self.view.settings()
+        project_settings = self.get_project_options()
+
+        settings.update(project_settings)
+
+        return settings
+
+
 	def run(self, edit):
-		settings = self.view.settings()
+		settings = self.settings()
 
 		# settings
 		opts = jsbeautifier.default_options()
